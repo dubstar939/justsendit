@@ -412,7 +412,7 @@ export default function App() {
       <div className="mb-6 text-center">
         <h1 className="text-4xl md:text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-yellow-400 to-orange-500 uppercase italic tracking-widest flex items-center justify-center gap-3">
           <Play className="w-8 h-8 text-yellow-500 fill-current rotate-90 hidden md:block" />
-          Highway Rush
+         Just Send It
           <Play className="w-8 h-8 text-orange-500 fill-current rotate-90 hidden md:block" />
         </h1>
       </div>
