@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Trophy, Play, RotateCcw, ArrowLeft, ArrowRight, ArrowUp, ArrowDown } from 'lucide-react';
+import { Trophy, Play, RotateCcw, ArrowLeft, ArrowRight, ArrowUp, ArrowDown, Volume2, VolumeX } from 'lucide-react';
 
 const ROAD_WIDTH = 400;
 const CANVAS_HEIGHT = 600;
@@ -8,17 +8,166 @@ const CAR_HEIGHT = 70;
 
 type GameState = 'START' | 'PLAYING' | 'GAMEOVER';
 
+// Audio system using Web Audio API
+class AudioSystem {
+  private ctx: AudioContext | null = null;
+  private musicOscillators: OscillatorNode[] = [];
+  private musicGain: GainNode | null = null;
+  private isMuted = false;
+  private musicInterval: number | null = null;
+
+  init() {
+    if (!this.ctx) {
+      this.ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    }
+  }
+
+  toggleMute() {
+    this.isMuted = !this.isMuted;
+    if (this.musicGain) {
+      this.musicGain.gain.setValueAtTime(this.isMuted ? 0 : 0.15, this.ctx?.currentTime || 0);
+    }
+    return this.isMuted;
+  }
+
+  playEngineSound(speed: number) {
+    if (!this.ctx || this.isMuted) return;
+    
+    const oscillator = this.ctx.createOscillator();
+    const gainNode = this.ctx.createGain();
+    
+    // Engine pitch varies with speed
+    const baseFreq = 80 + (speed * 3);
+    oscillator.frequency.setValueAtTime(baseFreq, this.ctx.currentTime);
+    oscillator.type = 'sawtooth';
+    
+    gainNode.gain.setValueAtTime(0.08, this.ctx.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.02, this.ctx.currentTime + 0.1);
+    
+    oscillator.connect(gainNode);
+    gainNode.connect(this.ctx.destination);
+    
+    oscillator.start(this.ctx.currentTime);
+    oscillator.stop(this.ctx.currentTime + 0.1);
+  }
+
+  playCrashSound() {
+    if (!this.ctx || this.isMuted) return;
+    
+    // Create noise buffer for crash
+    const bufferSize = this.ctx.sampleRate * 0.5;
+    const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    
+    for (let i = 0; i < bufferSize; i++) {
+      data[i] = Math.random() * 2 - 1;
+    }
+    
+    const noise = this.ctx.createBufferSource();
+    noise.buffer = buffer;
+    
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 1000;
+    
+    const gainNode = this.ctx.createGain();
+    gainNode.gain.setValueAtTime(0.5, this.ctx.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.5);
+    
+    noise.connect(filter);
+    filter.connect(gainNode);
+    gainNode.connect(this.ctx.destination);
+    
+    noise.start(this.ctx.currentTime);
+  }
+
+  playScoreSound() {
+    if (!this.ctx || this.isMuted) return;
+    
+    const oscillator = this.ctx.createOscillator();
+    const gainNode = this.ctx.createGain();
+    
+    oscillator.frequency.setValueAtTime(880, this.ctx.currentTime);
+    oscillator.frequency.exponentialRampToValueAtTime(1760, this.ctx.currentTime + 0.1);
+    oscillator.type = 'sine';
+    
+    gainNode.gain.setValueAtTime(0.1, this.ctx.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.2);
+    
+    oscillator.connect(gainNode);
+    gainNode.connect(this.ctx.destination);
+    
+    oscillator.start(this.ctx.currentTime);
+    oscillator.stop(this.ctx.currentTime + 0.2);
+  }
+
+  startMusic() {
+    if (!this.ctx || this.isMuted) return;
+    
+    this.stopMusic();
+    
+    this.musicGain = this.ctx.createGain();
+    this.musicGain.gain.setValueAtTime(0.15, this.ctx.currentTime);
+    this.musicGain.connect(this.ctx.destination);
+    
+    // Simple driving beat pattern
+    const bassFreqs = [110, 110, 130, 110, 98, 98, 110, 130];
+    let noteIndex = 0;
+    
+    const playNote = () => {
+      if (!this.ctx || this.isMuted || !this.musicGain) return;
+      
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      
+      osc.frequency.setValueAtTime(bassFreqs[noteIndex % bassFreqs.length], this.ctx.currentTime);
+      osc.type = 'square';
+      
+      gain.gain.setValueAtTime(0.3, this.ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + 0.15);
+      
+      osc.connect(gain);
+      gain.connect(this.musicGain);
+      
+      osc.start(this.ctx.currentTime);
+      osc.stop(this.ctx.currentTime + 0.15);
+      
+      noteIndex++;
+    };
+    
+    playNote();
+    this.musicInterval = window.setInterval(playNote, 125); // 120 BPM equivalent
+  }
+
+  stopMusic() {
+    if (this.musicInterval) {
+      clearInterval(this.musicInterval);
+      this.musicInterval = null;
+    }
+    this.musicOscillators.forEach(osc => osc.stop());
+    this.musicOscillators = [];
+  }
+}
+
+const audioSystem = new AudioSystem();
+
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [gameState, setGameState] = useState<GameState>('START');
   const [score, setScore] = useState(0);
   const [highScore, setHighScore] = useState(0);
+  const [isMuted, setIsMuted] = useState(false);
   
   // High score persistence
   useEffect(() => {
     const saved = localStorage.getItem('trafficHighScore');
     if (saved) setHighScore(parseInt(saved, 10));
   }, []);
+
+  const handleMuteToggle = () => {
+    const muted = audioSystem.toggleMute();
+    setIsMuted(muted);
+  };
 
   const saveHighScore = (newScore: number) => {
     if (newScore > highScore) {
@@ -161,6 +310,10 @@ export default function App() {
       // Vertical Speed control
       if (keys.ArrowUp || keys.w) {
         currentSpeed += 0.15;
+        // Play engine sound when accelerating
+        if (frameCount % 8 === 0) {
+          audioSystem.playEngineSound(currentSpeed);
+        }
       } else if (keys.ArrowDown || keys.s) {
         currentSpeed -= 0.3;
       } else {
@@ -181,9 +334,16 @@ export default function App() {
       }
 
       // Score
+      const prevScore = Math.floor(currentScore);
       currentScore += currentSpeed / 15;
+      const newScore = Math.floor(currentScore);
       if (frameCount % 5 === 0) {
-        setScore(Math.floor(currentScore));
+        setScore(newScore);
+      }
+      
+      // Play score sound when score increases by milestone
+      if (newScore > prevScore && newScore % 50 === 0) {
+        audioSystem.playScoreSound();
       }
 
       // Spawning enemies dynamically based on score
@@ -209,6 +369,8 @@ export default function App() {
           isGameOver = true;
           setGameState('GAMEOVER');
           saveHighScore(Math.floor(currentScore));
+          audioSystem.playCrashSound();
+          audioSystem.stopMusic();
         }
 
         if (enemy.y > CANVAS_HEIGHT + CAR_HEIGHT) {
@@ -385,6 +547,11 @@ export default function App() {
       enemies = [];
       setScore(0);
       isGameOver = false;
+      
+      // Initialize audio and start music
+      audioSystem.init();
+      audioSystem.startMusic();
+      
       loop();
     } else if (gameState === 'START') {
       draw();
@@ -394,6 +561,7 @@ export default function App() {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
       cancelAnimationFrame(animationId);
+      audioSystem.stopMusic();
     };
   }, [gameState]);
 
@@ -440,7 +608,10 @@ export default function App() {
                 Use arrow keys to steer, accelerate, and brake. Avoid all traffic!
               </p>
               <button 
-                onClick={() => setGameState('PLAYING')}
+                onClick={() => {
+                  audioSystem.init();
+                  setGameState('PLAYING');
+                }}
                 className="px-8 py-4 bg-gradient-to-r from-yellow-500 to-orange-500 hover:from-yellow-400 hover:to-orange-400 text-slate-900 font-black text-xl rounded-xl shadow-[0_0_20px_rgba(245,158,11,0.4)] transition-all active:scale-95 uppercase tracking-wider"
               >
                 Start Engine
@@ -467,7 +638,10 @@ export default function App() {
               </div>
 
               <button 
-                onClick={() => setGameState('PLAYING')}
+                onClick={() => {
+                  audioSystem.init();
+                  setGameState('PLAYING');
+                }}
                 className="px-8 py-4 bg-white hover:bg-slate-200 text-red-900 font-black text-xl rounded-xl shadow-xl transition-all active:scale-95 flex items-center gap-3 uppercase tracking-wider"
               >
                 <RotateCcw className="w-6 h-6" />
@@ -478,18 +652,30 @@ export default function App() {
           
           {/* In-Game HUD */}
           {gameState === 'PLAYING' && (
-            <div className="absolute top-0 left-0 right-0 p-4 flex justify-between items-start pointer-events-none z-10">
-              <div className="bg-slate-900/90 px-4 py-2 rounded-xl border border-slate-700/50 backdrop-blur-md shadow-lg">
+            <div className="absolute top-0 left-0 right-0 p-4 flex justify-between items-start z-10">
+              <div className="bg-slate-900/90 px-4 py-2 rounded-xl border border-slate-700/50 backdrop-blur-md shadow-lg pointer-events-auto">
                 <p className="text-slate-400 text-[10px] uppercase tracking-widest font-bold mb-0.5">Score</p>
                 <p className="text-2xl font-black text-white leading-none">{score}</p>
               </div>
-              <div className="bg-slate-900/90 px-4 py-2 rounded-xl border border-slate-700/50 backdrop-blur-md shadow-lg flex items-center gap-3">
-                <div className="bg-yellow-500/20 p-1.5 rounded-lg">
-                  <Trophy className="w-4 h-4 text-yellow-500" />
-                </div>
-                <div>
-                  <p className="text-slate-400 text-[10px] uppercase tracking-widest font-bold mb-0.5">Best</p>
-                  <p className="text-lg font-bold text-yellow-500 leading-none">{Math.max(score, highScore)}</p>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleMuteToggle}
+                  className="bg-slate-900/90 hover:bg-slate-800/90 px-3 py-2 rounded-xl border border-slate-700/50 backdrop-blur-md shadow-lg transition-all pointer-events-auto"
+                >
+                  {isMuted ? (
+                    <VolumeX className="w-5 h-5 text-slate-400" />
+                  ) : (
+                    <Volume2 className="w-5 h-5 text-yellow-500" />
+                  )}
+                </button>
+                <div className="bg-slate-900/90 px-4 py-2 rounded-xl border border-slate-700/50 backdrop-blur-md shadow-lg flex items-center gap-3">
+                  <div className="bg-yellow-500/20 p-1.5 rounded-lg">
+                    <Trophy className="w-4 h-4 text-yellow-500" />
+                  </div>
+                  <div>
+                    <p className="text-slate-400 text-[10px] uppercase tracking-widest font-bold mb-0.5">Best</p>
+                    <p className="text-lg font-bold text-yellow-500 leading-none">{Math.max(score, highScore)}</p>
+                  </div>
                 </div>
               </div>
             </div>
