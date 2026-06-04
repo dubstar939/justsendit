@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { Trophy, Play, RotateCcw, ArrowLeft, ArrowRight, ArrowUp, ArrowDown, Volume2, VolumeX } from 'lucide-react';
+import { Trophy, Play, RotateCcw, ArrowLeft, ArrowRight, ArrowUp, ArrowDown, Volume2, VolumeX, Car, Zap, Truck } from 'lucide-react';
+import { CAR_TYPES, EnemyCar, getRandomEnemyCar, maybeSpawnTruck, CarModel } from './types/car';
 
 const ROAD_WIDTH = 400;
 const CANVAS_HEIGHT = 600;
@@ -209,15 +210,7 @@ export default function App() {
       s: false,
     };
 
-    interface Enemy {
-      x: number;
-      y: number;
-      speed: number;
-      color: string;
-      lane: number;
-    }
-    
-    let enemies: Enemy[] = [];
+    let enemies: EnemyCar[] = [];
     
     interface Line {
       y: number;
@@ -226,8 +219,6 @@ export default function App() {
     for (let i = 0; i < CANVAS_HEIGHT; i += 50) {
       lines.push({ y: i });
     }
-
-    const enemyColors = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4'];
 
     const handleKeyDown = (e: KeyboardEvent) => {
       const key = e.key;
@@ -258,18 +249,25 @@ export default function App() {
     const spawnEnemy = () => {
       const lane = Math.floor(Math.random() * 3);
       const laneWidth = ROAD_WIDTH / 3;
-      const x = lane * laneWidth + (laneWidth - CAR_WIDTH) / 2;
-      const y = -CAR_HEIGHT * 2;
+      
+      // Decide if spawning a truck or regular car
+      const isTruck = maybeSpawnTruck();
+      const carModel = isTruck 
+        ? CAR_TYPES.find(c => c.id === 'truck')! 
+        : getRandomEnemyCar();
+      
+      const x = lane * laneWidth + (laneWidth - carModel.width) / 2;
+      const y = -carModel.height * 2;
       
       // Prevent spawning directly on top of another recently spawned enemy
-      const isOverlapping = enemies.some(e => Math.abs(e.y - y) < CAR_HEIGHT * 2 && e.lane === lane);
+      const isOverlapping = enemies.some(e => Math.abs(e.y - y) < carModel.height * 2 && e.lane === lane);
       
       if (!isOverlapping) {
         enemies.push({
           x,
           y,
-          speed: Math.random() * 2 + 0.5, // Slower/faster modifiers
-          color: enemyColors[Math.floor(Math.random() * enemyColors.length)],
+          speed: carModel.maxSpeed * 0.3 + Math.random() * 2,
+          model: carModel,
           lane
         });
       }
@@ -355,15 +353,17 @@ export default function App() {
       // Update and prune enemies
       for (let i = enemies.length - 1; i >= 0; i--) {
         const enemy = enemies[i];
+        const carWidth = enemy.model.width;
+        const carHeight = enemy.model.height;
         
         enemy.y += (currentSpeed - 3) + enemy.speed; 
         
-        // Strict collision detection (slightly forgiving bounding box)
+        // Strict collision detection using actual car dimensions
         const hitBoxPadding = 4;
         if (
-          playerX + hitBoxPadding < enemy.x + CAR_WIDTH - hitBoxPadding &&
+          playerX + hitBoxPadding < enemy.x + carWidth - hitBoxPadding &&
           playerX + CAR_WIDTH - hitBoxPadding > enemy.x + hitBoxPadding &&
-          playerY + hitBoxPadding < enemy.y + CAR_HEIGHT - hitBoxPadding &&
+          playerY + hitBoxPadding < enemy.y + carHeight - hitBoxPadding &&
           playerY + CAR_HEIGHT - hitBoxPadding > enemy.y + hitBoxPadding
         ) {
           isGameOver = true;
@@ -373,7 +373,7 @@ export default function App() {
           audioSystem.stopMusic();
         }
 
-        if (enemy.y > CANVAS_HEIGHT + CAR_HEIGHT) {
+        if (enemy.y > CANVAS_HEIGHT + carHeight) {
           enemies.splice(i, 1);
         }
       }
@@ -399,73 +399,99 @@ export default function App() {
       }
     };
 
-    const drawCar = (x: number, y: number, color: string, isPlayer: boolean) => {
+    const drawCar = (x: number, y: number, color: string, isPlayer: boolean, model?: CarModel) => {
+      const carWidth = model?.width || CAR_WIDTH;
+      const carHeight = model?.height || CAR_HEIGHT;
+      
       ctx.save();
       ctx.translate(x, y);
 
       // Drop shadow
       ctx.fillStyle = 'rgba(0,0,0,0.4)';
-      drawRoundRect(4, 4, CAR_WIDTH, CAR_HEIGHT, 6);
+      drawRoundRect(4, 4, carWidth, carHeight, 6);
       ctx.fill();
 
       // Main body
       ctx.fillStyle = color;
-      drawRoundRect(0, 0, CAR_WIDTH, CAR_HEIGHT, 6);
+      drawRoundRect(0, 0, carWidth, carHeight, 6);
       ctx.fill();
       
-      // Roof / Windows
+      // Roof / Windows - scaled to car size
+      const roofScale = carHeight / CAR_HEIGHT;
       ctx.fillStyle = '#1e293b'; // slate-800
-      drawRoundRect(4, 15, CAR_WIDTH - 8, CAR_HEIGHT - 30, 4);
+      drawRoundRect(
+        4 * (carWidth / CAR_WIDTH), 
+        15 * roofScale, 
+        carWidth - 8 * (carWidth / CAR_WIDTH), 
+        carHeight - 30 * roofScale, 
+        4
+      );
       ctx.fill();
       
-      // Windshield reflection
+      // Windshield reflection - scaled
       ctx.fillStyle = 'rgba(255,255,255,0.15)';
       ctx.beginPath();
-      ctx.moveTo(6, 17);
-      ctx.lineTo(CAR_WIDTH - 6, 17);
-      ctx.lineTo(CAR_WIDTH - 8, 25);
-      ctx.lineTo(8, 25);
+      ctx.moveTo(6 * (carWidth / CAR_WIDTH), 17 * roofScale);
+      ctx.lineTo(carWidth - 6 * (carWidth / CAR_WIDTH), 17 * roofScale);
+      ctx.lineTo(carWidth - 8 * (carWidth / CAR_WIDTH), 25 * roofScale);
+      ctx.lineTo(8 * (carWidth / CAR_WIDTH), 25 * roofScale);
       ctx.closePath();
       ctx.fill();
 
-      // Rear window reflection
+      // Rear window reflection - scaled
       ctx.fillStyle = 'rgba(255,255,255,0.1)';
       ctx.beginPath();
-      ctx.moveTo(8, CAR_HEIGHT - 23);
-      ctx.lineTo(CAR_WIDTH - 8, CAR_HEIGHT - 23);
-      ctx.lineTo(CAR_WIDTH - 6, CAR_HEIGHT - 17);
-      ctx.lineTo(6, CAR_HEIGHT - 17);
+      ctx.moveTo(8 * (carWidth / CAR_WIDTH), carHeight - 23 * roofScale);
+      ctx.lineTo(carWidth - 8 * (carWidth / CAR_WIDTH), carHeight - 23 * roofScale);
+      ctx.lineTo(carWidth - 6 * (carWidth / CAR_WIDTH), carHeight - 17 * roofScale);
+      ctx.lineTo(6 * (carWidth / CAR_WIDTH), carHeight - 17 * roofScale);
       ctx.closePath();
       ctx.fill();
 
-      // Headlights
+      // Headlights - scaled
       ctx.fillStyle = isPlayer ? '#fef08a' : '#fef08a';
-      drawRoundRect(4, 2, 8, 4, 2);
+      drawRoundRect(4 * (carWidth / CAR_WIDTH), 2, 8 * (carWidth / CAR_WIDTH), 4, 2);
       ctx.fill();
-      drawRoundRect(CAR_WIDTH - 12, 2, 8, 4, 2);
+      drawRoundRect(carWidth - 12 * (carWidth / CAR_WIDTH), 2, 8 * (carWidth / CAR_WIDTH), 4, 2);
       ctx.fill();
 
-      // Taillights
-      ctx.fillStyle = isPlayer ? (keys.ArrowDown || keys.s ? '#ef4444' : '#991b1b') : '#ef4444'; // Bright red if player is braking
-      drawRoundRect(4, CAR_HEIGHT - 6, 8, 4, 2);
+      // Taillights - scaled
+      ctx.fillStyle = isPlayer ? (keys.ArrowDown || keys.s ? '#ef4444' : '#991b1b') : '#ef4444';
+      drawRoundRect(4 * (carWidth / CAR_WIDTH), carHeight - 6, 8 * (carWidth / CAR_WIDTH), 4, 2);
       ctx.fill();
-      drawRoundRect(CAR_WIDTH - 12, CAR_HEIGHT - 6, 8, 4, 2);
+      drawRoundRect(carWidth - 12 * (carWidth / CAR_WIDTH), carHeight - 6, 8 * (carWidth / CAR_WIDTH), 4, 2);
       ctx.fill();
 
       // Player flame effect from exhaust when accelerating
       if (isPlayer && (keys.ArrowUp || keys.w) && gameState === 'PLAYING') {
         ctx.fillStyle = '#f97316'; // orange-500
         ctx.beginPath();
-        ctx.moveTo(10, CAR_HEIGHT);
-        ctx.lineTo(14, CAR_HEIGHT + Math.random() * 8 + 4);
-        ctx.lineTo(18, CAR_HEIGHT);
+        ctx.moveTo(10 * (carWidth / CAR_WIDTH), carHeight);
+        ctx.lineTo(14 * (carWidth / CAR_WIDTH), carHeight + Math.random() * 8 + 4);
+        ctx.lineTo(18 * (carWidth / CAR_WIDTH), carHeight);
         ctx.fill();
 
         ctx.beginPath();
-        ctx.moveTo(CAR_WIDTH - 18, CAR_HEIGHT);
-        ctx.lineTo(CAR_WIDTH - 14, CAR_HEIGHT + Math.random() * 8 + 4);
-        ctx.lineTo(CAR_WIDTH - 10, CAR_HEIGHT);
+        ctx.moveTo(carWidth - 18 * (carWidth / CAR_WIDTH), carHeight);
+        ctx.lineTo(carWidth - 14 * (carWidth / CAR_WIDTH), carHeight + Math.random() * 8 + 4);
+        ctx.lineTo(carWidth - 10 * (carWidth / CAR_WIDTH), carHeight);
         ctx.fill();
+      }
+
+      // Draw truck-specific details if applicable
+      if (model?.type === 'truck') {
+        // Add cargo box detail for trucks
+        ctx.fillStyle = 'rgba(0,0,0,0.2)';
+        drawRoundRect(6, carHeight * 0.3, carWidth - 12, carHeight * 0.4, 3);
+        ctx.fill();
+        
+        // Truck bed lines
+        ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(8, carHeight * 0.4);
+        ctx.lineTo(carWidth - 8, carHeight * 0.4);
+        ctx.stroke();
       }
 
       ctx.restore();
@@ -503,7 +529,7 @@ export default function App() {
 
       // Draw enemies
       enemies.forEach(enemy => {
-        drawCar(enemy.x, enemy.y, enemy.color, false);
+        drawCar(enemy.x, enemy.y, enemy.model.color, false, enemy.model);
       });
 
       // Draw player
